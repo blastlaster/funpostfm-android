@@ -24,3 +24,7 @@ keystore held in the repository's secrets.
   and car controls.
 - `LiveCheckWorker.kt` checks every ~15 minutes while the app is closed (the
   shortest interval Android allows) for the "we're live" alert.
+- `Updates.kt` looks at this repository's latest release every few hours while
+  the app is open (or from Menu → Updates). A newer version downloads with
+  Android's DownloadManager and opens Android's installer; it installs over the
+  old one because releases share the same signing key.

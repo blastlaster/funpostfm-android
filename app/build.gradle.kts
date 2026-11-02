@@ -12,8 +12,8 @@ android {
         applicationId = "org.neocities.esfores.funpostfm"
         minSdk = 21
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     // Release signing comes from the environment (GitHub secrets), never from the repo.

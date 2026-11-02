@@ -34,12 +34,16 @@ class PlaybackService : MediaSessionService() {
     private var retries = 0
     private var paused = false
     private var icyTitle: String? = null
+    // "Keep playing when headphones or a speaker disconnect", switched while the radio runs.
+    private val prefsWatch = android.content.SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+        if (key == "keepPlaying") (session?.player as? ExoPlayer)?.setHandleAudioBecomingNoisy(!p.getBoolean(key, false))
+    }
 
     override fun onCreate() {
         super.onCreate()
         val player = ExoPlayer.Builder(this)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
-            .setHandleAudioBecomingNoisy(true)   // headphones out: stop, don't blast the room
+            .setHandleAudioBecomingNoisy(!App.keepPlaying(this))   // headphones out: stop, don't blast the room (unless asked)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         player.addListener(object : Player.Listener {
@@ -93,6 +97,7 @@ class PlaybackService : MediaSessionService() {
             })
             .setSessionActivity(open)
             .build()
+        App.prefs(this).registerOnSharedPreferenceChangeListener(prefsWatch)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
@@ -153,6 +158,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        App.prefs(this).unregisterOnSharedPreferenceChangeListener(prefsWatch)
         scope.cancel()
         session?.run { player.release(); release() }
         session = null

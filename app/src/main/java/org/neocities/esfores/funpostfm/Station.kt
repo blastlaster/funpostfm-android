@@ -26,7 +26,12 @@ object Station {
         val listeners: Int? = null,
         val recent: List<Song> = emptyList(),
         val via: String = "none",   // studio | panel | none
+        val engine: String = "",    // the studio PC, when it's on
+        val skip: Skip? = null,     // a vote to skip the AutoDJ song, when the station has it on
     )
+
+    /** Listeners vote an AutoDJ song off: more than half of those listening skips it. */
+    data class Skip(val musicId: Long, val votes: Int, val needed: Int, val skipped: Boolean)
 
     private fun get(url: String): JSONObject {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -71,6 +76,29 @@ object Station {
         }.getOrNull()
     }
 
+    /** A vote to skip what AutoDJ is playing. Says how it went, in words. */
+    suspend fun skipVote(engine: String, voter: String, musicId: Long): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = URL("$engine/api/skip").openConnection() as HttpURLConnection
+            c.connectTimeout = 10_000
+            c.readTimeout = 10_000
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "text/plain")
+            try {
+                c.outputStream.use { it.write(JSONObject().put("voter", voter).put("musicId", musicId).toString().toByteArray()) }
+                val body = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: "{}"
+                val r = JSONObject(body)
+                when {
+                    r.str("error").isNotBlank() -> r.str("error")
+                    r.optBoolean("already") -> "You’ve voted to skip this one."
+                    r.optBoolean("skipped") -> "Skipped. ⏭"
+                    else -> "Vote counted: ${r.optInt("votes")} of ${r.optInt("needed")} to skip."
+                }
+            } finally { c.disconnect() }
+        }.getOrElse { "Couldn’t reach the station. Try again in a moment." }
+    }
+
     /** Never throws: a station that can't be reached is simply not live. */
     suspend fun check(): Status = withContext(Dispatchers.IO) {
         var engine = ""
@@ -109,6 +137,10 @@ object Station {
                         Song(r.str("artist"), r.str("title"), abs(r.str("img"), engine))
                     }).take(5),
                     via = "studio",
+                    engine = engine,
+                    skip = s.optJSONObject("skip")?.takeIf { !live && it.optBoolean("on") && it.optLong("musicId") > 0 }?.let {
+                        Skip(it.optLong("musicId"), it.optInt("votes"), it.optInt("needed", 1), it.optBoolean("skipped"))
+                    },
                 )
             }
         }

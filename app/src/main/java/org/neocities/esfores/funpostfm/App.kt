@@ -43,6 +43,16 @@ class App : Application() {
 
         fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         fun alertsOn(c: Context) = prefs(c).getBoolean("alerts", true)
+        /** Headphones or a Bluetooth speaker gone: keep playing (out loud) instead of stopping. */
+        fun keepPlaying(c: Context) = prefs(c).getBoolean("keepPlaying", false)
+        fun setKeepPlaying(c: Context, on: Boolean) = prefs(c).edit().putBoolean("keepPlaying", on).apply()
+        fun theme(c: Context) = prefs(c).getString("theme", "funpost") ?: "funpost"
+        fun setTheme(c: Context, id: String) = prefs(c).edit().putString("theme", id).apply()
+
+        /** This phone's own voter id for skip votes (random, nothing personal in it). */
+        fun voter(c: Context): String = prefs(c).getString("voter", null) ?: java.util.UUID.randomUUID().toString().also {
+            prefs(c).edit().putString("voter", it).apply()
+        }
 
         fun setAlerts(c: Context, on: Boolean) {
             prefs(c).edit().putBoolean("alerts", on).apply()
