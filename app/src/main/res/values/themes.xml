@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.FunpostFM" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+    </style>
+    <color name="bg">#160F24</color>
+    <color name="icon_bg">#3B1F5E</color>
+</resources>

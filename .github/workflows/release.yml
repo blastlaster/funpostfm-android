@@ -1,0 +1,31 @@
+# Push a tag like v0.1.0 to build a signed APK and publish it as a release.
+name: Release APK
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Keystore from secrets
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Build
+        env:
+          FPFM_KEYSTORE: ${{ runner.temp }}/release.jks
+          FPFM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          FPFM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          FPFM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk FunpostFM.apk
+          gh release create "$GITHUB_REF_NAME" FunpostFM.apk --title "FunpostFM $GITHUB_REF_NAME" --generate-notes
