@@ -48,13 +48,26 @@ object Station {
     private fun JSONObject.str(k: String) = if (isNull(k)) "" else optString(k, "")
 
     /**
+     * A panel history row as a song. Untagged songs carry only raw metadata shaped
+     * "DJ: artist - title - album", sometimes with parts empty: pick it apart like the engine does.
+     */
+    private fun rowSong(r: JSONObject, base: String): Song {
+        var meta = r.str("metadata")
+        val dj = r.str("dj_name")
+        if (dj.isNotBlank() && meta.startsWith("$dj:")) meta = meta.substring(dj.length + 1)
+        val parts = meta.split(" - ").map { it.trim() }
+        val title = r.str("title").ifBlank { listOf(1, 2, 0).mapNotNull { parts.getOrNull(it) }.firstOrNull { it.isNotBlank() } ?: "" }
+        val artist = r.str("author").ifBlank { if (parts.size > 1) parts[0] else "" }
+        return Song(artist, title.replace(Regex("""\s*\[Requested by [^\]]*\]\s*$""", RegexOption.IGNORE_CASE), ""), abs(r.str("img_medium_url").ifBlank { r.str("img_url") }, base))
+    }
+
+    /**
      * The song the station panel says is on now. The panel hears about a new song within a
      * second or two; the studio PC only catches up every 20 s or so. Null when unreachable.
      */
     suspend fun panelSong(): Song? = withContext(Dispatchers.IO) {
         runCatching {
-            val r = get("$PANEL_API/history/?format=json&limit=1&offset=0&server=1").getJSONArray("results").getJSONObject(0)
-            Song(r.str("author"), r.str("title").ifBlank { r.str("metadata").substringAfter(": ") }, abs(r.str("img_medium_url").ifBlank { r.str("img_url") }, PANEL_API))
+            rowSong(get("$PANEL_API/history/?format=json&limit=1&offset=0&server=1").getJSONArray("results").getJSONObject(0), PANEL_API)
         }.getOrNull()
     }
 
@@ -105,7 +118,7 @@ object Station {
             val h = get("$panel/history/?format=json&limit=6&offset=0&server=$server")
             val rows = h.optJSONArray("results")
             if (rows != null && rows.length() > 0) {
-                fun song(r: JSONObject) = Song(r.str("author"), r.str("title").ifBlank { r.str("metadata").substringAfter(": ") }, abs(r.str("img_medium_url").ifBlank { r.str("img_url") }, panel))
+                fun song(r: JSONObject) = rowSong(r, panel)
                 val row = rows.getJSONObject(0)
                 // A live DJ shows up as a row that isn't a library song or a jingle.
                 val dj = if (row.str("dj_name").isNotBlank() && row.isNull("all_music_id") && row.isNull("jingle_id") && row.optLong("length", 0) == 0L) row.str("dj_name") else ""
