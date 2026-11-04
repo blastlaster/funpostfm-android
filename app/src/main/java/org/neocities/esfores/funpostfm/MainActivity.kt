@@ -50,9 +50,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +110,10 @@ class MainActivity : ComponentActivity() {
     private var controller: MediaController? = null
     private var playing by mutableStateOf(false)
     private var buffering by mutableStateOf(false)
+    private var lost by mutableStateOf(false)         // the stream broke and couldn't be got back
+    private var lag by mutableLongStateOf(0L)         // how far behind the broadcast what you hear is (ms)
+    private var votes by mutableStateOf<Map<Long, Boolean?>>(emptyMap())
+    private var tally by mutableStateOf<Triple<Long, Int?, Int?>?>(null)   // song id, 👍, 👎 as the panel last said
     private var alerts by mutableStateOf(true)
     private var keepPlaying by mutableStateOf(false)
     private var look by mutableStateOf(LOOKS[0])
@@ -119,6 +126,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         alerts = App.alertsOn(this)
         keepPlaying = App.keepPlaying(this)
+        votes = App.votes(this)
         look = LOOKS.firstOrNull { it.id == App.theme(this) } ?: LOOKS[0]
         bars()
         playWhenConnected = intent?.getBooleanExtra(EXTRA_PLAY, false) == true
@@ -188,6 +196,7 @@ class MainActivity : ComponentActivity() {
         val c = controller ?: return
         playing = c.mediaItemCount > 0 && !Util.shouldShowPlayButton(c)
         buffering = playing && c.playbackState == Player.STATE_BUFFERING
+        lost = c.playerError != null && c.playbackState == Player.STATE_IDLE
     }
 
     private fun play() {
@@ -214,6 +223,20 @@ class MainActivity : ComponentActivity() {
             val said = Station.skipVote(st.engine, App.voter(this@MainActivity), s.musicId)
             Toast.makeText(this@MainActivity, said, Toast.LENGTH_SHORT).show()
             App.publish(this@MainActivity, Station.check())
+        }
+    }
+
+    private fun rate(st: Station.Status, like: Boolean) {
+        val id = st.song.id
+        if (id in votes) { Toast.makeText(this, "You already voted for this one.", Toast.LENGTH_SHORT).show(); return }
+        lifecycleScope.launch {
+            val v = Station.rate(st.panel, id, like)
+            if (v.counted) {
+                App.rememberVote(this@MainActivity, id, if (v.already) null else like)
+                votes = App.votes(this@MainActivity)
+                if (v.up != null || v.down != null) tally = Triple(id, v.up, v.down)
+            }
+            Toast.makeText(this@MainActivity, v.said, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -283,6 +306,7 @@ class MainActivity : ComponentActivity() {
             )
             Text(st.song.artist.ifBlank { " " }, color = l.dim, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(if (st.requestedBy.isNotBlank()) "requested by ${st.requestedBy}" else " ", color = l.dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            SongBar(st)
             Spacer(Modifier.height(14.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(22.dp)) {
                 RoundButton("💬", "Requests, chat & call-in", enabled = true) { openSite() }
@@ -292,12 +316,73 @@ class MainActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
             Text(
                 listOfNotNull(
-                    when { buffering -> "Connecting…"; playing -> "Playing"; else -> null },
+                    when { buffering -> "Connecting…"; playing -> "Playing"; lost -> "Lost the stream — ▶ to try again"; else -> null },
                     st.listeners?.takeIf { it > 0 }?.let { "👤 $it listening" },
                     st.skip?.takeIf { it.votes > 0 }?.let { "⏭ ${it.votes}/${it.needed}" },
                 ).joinToString("   ·   ").ifEmpty { " " },
                 color = l.dim, fontSize = 13.sp, maxLines = 1,
             )
+        }
+    }
+
+    /**
+     * How far into the AutoDJ song (length and time left), and 👍/👎 for it. Counted from when
+     * the station says it started, less what the player is holding back, so it matches what you hear.
+     */
+    @Composable
+    private fun SongBar(st: Station.Status) {
+        val l = look
+        val s = st.song
+        val timed = !st.live && s.at > 0 && s.length > 0
+        val canVote = !st.live && s.id > 0 && st.panel.isNotBlank()
+        if (!timed && !canVote) return
+        var now by remember { mutableLongStateOf(Station.serverNow()) }
+        LaunchedEffect(s.at, timed) {
+            var asked = false
+            while (timed) {
+                now = Station.serverNow()
+                lag = controller?.takeIf { playing }?.totalBufferedDuration ?: 0L
+                // The song should be over: look at what's on now instead of waiting for the next tick.
+                if (!asked && now - s.at > s.length + 4_000) { asked = true; App.publish(this@MainActivity, Station.check()) }
+                delay(1_000)
+            }
+        }
+        val heard = (now - s.at - lag).coerceIn(0L, s.length.coerceAtLeast(0L))
+        Spacer(Modifier.height(10.dp))
+        if (timed) {
+            Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(l.line)) {
+                Box(Modifier.fillMaxWidth(heard.toFloat() / s.length).height(4.dp).background(Brush.horizontalGradient(listOf(l.accent, l.accent2))))
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (timed) "${mmss(heard)} / ${mmss(s.length)}" else "", color = l.dim, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            if (canVote) {
+                val mine = votes[s.id]
+                val voted = s.id in votes
+                val t = tally?.takeIf { it.first == s.id }
+                VoteChip("👍", t?.second, chosen = mine == true, dim = voted && mine != true, desc = "I like this one") { rate(st, true) }
+                Spacer(Modifier.width(8.dp))
+                VoteChip("👎", t?.third, chosen = mine == false, dim = voted && mine != false, desc = "Not for me") { rate(st, false) }
+            }
+            Text(if (timed) "−${mmss(s.length - heard)} left" else "", color = l.dim, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+        }
+    }
+
+    private fun mmss(ms: Long): String { val t = ms / 1000; return "${t / 60}:${(t % 60).toString().padStart(2, '0')}" }
+
+    @Composable
+    private fun VoteChip(label: String, count: Int?, chosen: Boolean, dim: Boolean, desc: String, onClick: () -> Unit) {
+        val l = look
+        Row(
+            Modifier.height(40.dp).alpha(if (dim) 0.45f else 1f).clip(RoundedCornerShape(20.dp))
+                .background(if (chosen) l.accent.copy(alpha = 0.25f) else l.panel)
+                .border(1.dp, if (chosen) l.accent else l.line, RoundedCornerShape(20.dp))
+                .clickable(onClickLabel = desc, onClick = onClick).padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, fontSize = 17.sp)
+            if (count != null) { Spacer(Modifier.width(6.dp)); Text("$count", color = l.text, fontSize = 13.sp) }
         }
     }
 

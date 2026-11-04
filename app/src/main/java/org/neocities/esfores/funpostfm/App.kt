@@ -54,6 +54,17 @@ class App : Application() {
             prefs(c).edit().putString("voter", it).apply()
         }
 
+        /** 👍/👎 given on this phone, oldest first: song id → true 👍, false 👎, null (voted, but not saying which). */
+        fun votes(c: Context): Map<Long, Boolean?> = (prefs(c).getString("votes", "") ?: "").split(',').mapNotNull { e ->
+            val kv = e.split(':').takeIf { it.size == 2 } ?: return@mapNotNull null
+            kv[0].toLongOrNull()?.let { it to when (kv[1]) { "1" -> true; "0" -> false; else -> null } }
+        }.toMap()
+
+        fun rememberVote(c: Context, id: Long, like: Boolean?) {
+            val list = votes(c).filterKeys { it != id }.toList() + (id to like)
+            prefs(c).edit().putString("votes", list.takeLast(60).joinToString(",") { (k, v) -> "$k:" + when (v) { true -> "1"; false -> "0"; null -> "?" } }).apply()
+        }
+
         fun setAlerts(c: Context, on: Boolean) {
             prefs(c).edit().putBoolean("alerts", on).apply()
             scheduleChecks(c)
